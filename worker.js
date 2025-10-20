@@ -130,8 +130,49 @@ function processGTFSData(gtfsData) {
 }
 
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request) {
     try {
+      // Parse URL to get query parameters
+      const url = new URL(request.url);
+      const stopId = url.searchParams.get('stopId');
+
+      // Require stopId parameter
+      if (!stopId) {
+        return new Response(
+          JSON.stringify({
+            error: 'Missing required parameter',
+            message: 'Please provide a stopId query parameter',
+            usage: `${url.origin}/?stopId=101028`,
+            availableStops: Object.keys(MONITORED_STOPS).map(id => ({
+              stopId: id,
+              stopName: MONITORED_STOPS[id]
+            }))
+          }, null, 2),
+          {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        );
+      }
+
+      // Validate stopId
+      if (!MONITORED_STOPS[stopId]) {
+        return new Response(
+          JSON.stringify({
+            error: 'Invalid stopId',
+            message: `Stop ${stopId} is not monitored`,
+            availableStops: Object.keys(MONITORED_STOPS).map(id => ({
+              stopId: id,
+              stopName: MONITORED_STOPS[id]
+            }))
+          }, null, 2),
+          {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        );
+      }
+
       // Fetch GTFS realtime trip updates
       const response = await fetch(TRIP_UPDATES_URL);
 
@@ -149,7 +190,26 @@ export default {
       const gtfsData = await response.json();
 
       // Process and format the data
-      const result = processGTFSData(gtfsData);
+      const allResults = processGTFSData(gtfsData);
+
+      // Filter for requested stop
+      const result = allResults.find(stop => stop.stopId === stopId);
+
+      if (!result) {
+        return new Response(
+          JSON.stringify({
+            stopId,
+            stopName: MONITORED_STOPS[stopId],
+            routes: []
+          }, null, 2),
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'public, max-age=30'
+            }
+          }
+        );
+      }
 
       // Return formatted response
       return new Response(
