@@ -1,14 +1,14 @@
-// Stop IDs to monitor (from data/stops.csv)
-const MONITORED_STOPS = {
-  '101028': 'Shelbourne St at Blair Ave',
-  '101039': 'Shelbourne St at Blair Ave'
-};
-
 // GTFS Realtime API endpoint
 const TRIP_UPDATES_URL = 'https://bct.tmix.se/gtfs-realtime/tripupdates.js?operatorIds=48';
 
 // Maximum number of upcoming buses to show per route
 const MAX_BUSES_PER_ROUTE = 5;
+
+// All available stops (from data/stops.csv)
+const ALL_STOPS = {
+  '101028': 'Shelbourne St at Blair Ave',
+  '101039': 'Shelbourne St at Blair Ave'
+};
 
 /**
  * Format a Unix timestamp as arrival time string
@@ -37,24 +37,20 @@ function formatArrivalTime(timestamp, nowTimestamp) {
 }
 
 /**
- * Process GTFS realtime data and extract arrivals for monitored stops
+ * Process GTFS realtime data and extract arrivals for a specific stop
  * @param {Object} gtfsData - GTFS realtime feed data
- * @returns {Array} Structured array of stops with routes and buses
+ * @param {string} requestedStopId - The stop ID to filter for
+ * @returns {Object|null} Stop data with routes and buses, or null if no arrivals
  */
-function processGTFSData(gtfsData) {
+function processGTFSData(gtfsData, requestedStopId) {
   const nowTimestamp = Math.floor(Date.now() / 1000);
 
-  // Map to store arrivals grouped by stop -> route -> buses
-  const stopMap = new Map();
-
-  // Initialize map for each monitored stop
-  Object.keys(MONITORED_STOPS).forEach(stopId => {
-    stopMap.set(stopId, new Map());
-  });
+  // Map to store arrivals grouped by route -> buses
+  const routeMap = new Map();
 
   // Process each trip update
   if (!gtfsData.entity) {
-    return [];
+    return null;
   }
 
   gtfsData.entity.forEach(entity => {
@@ -69,8 +65,8 @@ function processGTFSData(gtfsData) {
     tripUpdate.stop_time_update.forEach(stopUpdate => {
       const stopId = stopUpdate.stop_id;
 
-      // Only process monitored stops
-      if (!MONITORED_STOPS[stopId]) return;
+      // Only process the requested stop
+      if (stopId !== requestedStopId) return;
       if (!stopUpdate.arrival?.timeSpecified) return;
 
       const arrivalTime = stopUpdate.arrival.time;
@@ -79,8 +75,7 @@ function processGTFSData(gtfsData) {
       // Only include future arrivals
       if (arrivalTime <= nowTimestamp) return;
 
-      // Get or create route entry for this stop
-      const routeMap = stopMap.get(stopId);
+      // Get or create route entry
       if (!routeMap.has(routeId)) {
         routeMap.set(routeId, []);
       }
@@ -94,58 +89,54 @@ function processGTFSData(gtfsData) {
     });
   });
 
-  // Convert map structure to array format
-  const result = [];
+  // Convert map structure to result format
+  const routes = [];
 
-  stopMap.forEach((routeMap, stopId) => {
-    const routes = [];
+  routeMap.forEach((buses, routeId) => {
+    // Sort buses by arrival time
+    buses.sort((a, b) => a.arrivalTimestamp - b.arrivalTimestamp);
 
-    routeMap.forEach((buses, routeId) => {
-      // Sort buses by arrival time
-      buses.sort((a, b) => a.arrivalTimestamp - b.arrivalTimestamp);
+    // Limit to MAX_BUSES_PER_ROUTE
+    const limitedBuses = buses.slice(0, MAX_BUSES_PER_ROUTE);
 
-      // Limit to MAX_BUSES_PER_ROUTE
-      const limitedBuses = buses.slice(0, MAX_BUSES_PER_ROUTE);
+    // Remove temporary sorting field
+    limitedBuses.forEach(bus => delete bus.arrivalTimestamp);
 
-      // Remove temporary sorting field
-      limitedBuses.forEach(bus => delete bus.arrivalTimestamp);
-
-      routes.push({
-        routeId,
-        buses: limitedBuses
-      });
+    routes.push({
+      routeId,
+      buses: limitedBuses
     });
-
-    // Only include stops that have arrivals
-    if (routes.length > 0) {
-      result.push({
-        stopId,
-        stopName: MONITORED_STOPS[stopId],
-        routes
-      });
-    }
   });
 
-  return result;
+  // Return null if no arrivals found
+  if (routes.length === 0) {
+    return null;
+  }
+
+  return {
+    stopId: requestedStopId,
+    stopName: ALL_STOPS[requestedStopId] || 'Unknown Stop',
+    routes
+  };
 }
 
 export default {
   async fetch(request) {
     try {
-      // Parse URL to get query parameters
+      // Parse URL to get path
       const url = new URL(request.url);
-      const stopId = url.searchParams.get('stopId');
+      const pathMatch = url.pathname.match(/^\/stop\/(\d+)$/);
 
-      // Require stopId parameter
-      if (!stopId) {
+      // Require /stop/{id} format
+      if (!pathMatch) {
         return new Response(
           JSON.stringify({
-            error: 'Missing required parameter',
-            message: 'Please provide a stopId query parameter',
-            usage: `${url.origin}/?stopId=101028`,
-            availableStops: Object.keys(MONITORED_STOPS).map(id => ({
+            error: 'Invalid route',
+            message: 'Please use the format /stop/{stopId}',
+            usage: `${url.origin}/stop/101028`,
+            exampleStops: Object.keys(ALL_STOPS).map(id => ({
               stopId: id,
-              stopName: MONITORED_STOPS[id]
+              stopName: ALL_STOPS[id]
             }))
           }, null, 2),
           {
@@ -155,23 +146,7 @@ export default {
         );
       }
 
-      // Validate stopId
-      if (!MONITORED_STOPS[stopId]) {
-        return new Response(
-          JSON.stringify({
-            error: 'Invalid stopId',
-            message: `Stop ${stopId} is not monitored`,
-            availableStops: Object.keys(MONITORED_STOPS).map(id => ({
-              stopId: id,
-              stopName: MONITORED_STOPS[id]
-            }))
-          }, null, 2),
-          {
-            status: 404,
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-      }
+      const stopId = pathMatch[1];
 
       // Fetch GTFS realtime trip updates
       const response = await fetch(TRIP_UPDATES_URL);
@@ -189,17 +164,15 @@ export default {
       // Parse the JSON response
       const gtfsData = await response.json();
 
-      // Process and format the data
-      const allResults = processGTFSData(gtfsData);
+      // Process and format the data for the requested stop
+      const result = processGTFSData(gtfsData, stopId);
 
-      // Filter for requested stop
-      const result = allResults.find(stop => stop.stopId === stopId);
-
+      // Return empty routes if no arrivals found
       if (!result) {
         return new Response(
           JSON.stringify({
             stopId,
-            stopName: MONITORED_STOPS[stopId],
+            stopName: ALL_STOPS[stopId] || 'Unknown Stop',
             routes: []
           }, null, 2),
           {
