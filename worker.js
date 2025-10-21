@@ -22,7 +22,7 @@ function formatArrivalTime(timestamp, nowTimestamp) {
   // If less than 60 minutes, show relative time
   if (minutesUntilArrival < 60) {
     const minutes = Math.max(0, minutesUntilArrival);
-    return minutes === 0 ? 'Now' : `${minutes} min`;
+    return minutes === 0 ? 'Now' : `${minutes} m`;
   }
 
   // Otherwise show absolute time in PST/PDT

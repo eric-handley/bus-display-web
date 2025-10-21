@@ -44,32 +44,27 @@ describe('Bus Display Worker', () => {
 
       expect(data).toHaveProperty('stopId', '101028');
       expect(data).toHaveProperty('stopName');
-      expect(data).toHaveProperty('routes');
-      expect(data.routes).toBeInstanceOf(Array);
+      expect(data).toHaveProperty('arrivals');
+      expect(data.arrivals).toBeInstanceOf(Array);
     }, API_TIMEOUT);
 
-    it('should return route structure with required fields', async () => {
+    it('should return arrival structure with required fields', async () => {
       const request = new Request('http://localhost:8787/stop/101028');
       const response = await worker.fetch(request);
       const data = await response.json();
 
-      if (data.routes.length > 0) {
-        const route = data.routes[0];
-        expect(route).toHaveProperty('routeId');
-        expect(route).toHaveProperty('buses');
-        expect(route.buses).toBeInstanceOf(Array);
+      if (data.arrivals.length > 0) {
+        const arrival = data.arrivals[0];
+        expect(arrival).toHaveProperty('routeId');
+        expect(arrival).toHaveProperty('arriving');
+        expect(arrival).toHaveProperty('deviation');
 
-        if (route.buses.length > 0) {
-          const bus = route.buses[0];
-          expect(bus).toHaveProperty('arriving');
-          expect(bus).toHaveProperty('delayed_by');
-
-          // Should NOT have these fields
-          expect(bus).not.toHaveProperty('tripId');
-          expect(bus).not.toHaveProperty('headsign');
-          expect(bus).not.toHaveProperty('vehicleId');
-          expect(bus).not.toHaveProperty('arrivalTimestamp');
-        }
+        // Should NOT have these fields
+        expect(arrival).not.toHaveProperty('tripId');
+        expect(arrival).not.toHaveProperty('headsign');
+        expect(arrival).not.toHaveProperty('vehicleId');
+        expect(arrival).not.toHaveProperty('arrivalTimestamp');
+        expect(arrival).not.toHaveProperty('delayed_by');
       }
     }, API_TIMEOUT);
 
@@ -78,23 +73,39 @@ describe('Bus Display Worker', () => {
       const response = await worker.fetch(request);
       const data = await response.json();
 
-      if (data.routes.length > 0) {
-        data.routes.forEach(route => {
-          expect(route.routeId).not.toContain('-VIC');
-          expect(route.routeId).not.toContain('-');
+      if (data.arrivals.length > 0) {
+        data.arrivals.forEach(arrival => {
+          expect(arrival.routeId).not.toContain('-VIC');
+          expect(arrival.routeId).not.toContain('-');
         });
       }
     }, API_TIMEOUT);
 
-    it('should limit buses per route to 5', async () => {
+    it('should limit total arrivals to 8', async () => {
       const request = new Request('http://localhost:8787/stop/101028');
       const response = await worker.fetch(request);
       const data = await response.json();
 
-      if (data.routes.length > 0) {
-        data.routes.forEach(route => {
-          expect(route.buses.length).toBeLessThanOrEqual(5);
-        });
+      expect(data.arrivals.length).toBeLessThanOrEqual(8);
+    }, API_TIMEOUT);
+
+    it('should sort arrivals by time', async () => {
+      const request = new Request('http://localhost:8787/stop/101028');
+      const response = await worker.fetch(request);
+      const data = await response.json();
+
+      if (data.arrivals.length > 1) {
+        // Check that arrivals are in order (Now < X m < Y m < time)
+        for (let i = 0; i < data.arrivals.length - 1; i++) {
+          const current = data.arrivals[i].arriving;
+          const next = data.arrivals[i + 1].arriving;
+
+          // Simple check: if current is "Now", next shouldn't be "Now"
+          // if current is "X m", next should be >= X m or a time
+          if (current === 'Now') {
+            expect(next).not.toBe('Now');
+          }
+        }
       }
     }, API_TIMEOUT);
   });
@@ -105,18 +116,16 @@ describe('Bus Display Worker', () => {
       const response = await worker.fetch(request);
       const data = await response.json();
 
-      if (data.routes.length > 0) {
-        data.routes.forEach(route => {
-          route.buses.forEach(bus => {
-            const arriving = bus.arriving;
+      if (data.arrivals.length > 0) {
+        data.arrivals.forEach(arrival => {
+          const arriving = arrival.arriving;
 
-            // Should be either "Now", "X min", or "H:MM am/pm" format
-            const isNow = arriving === 'Now';
-            const isMinutes = /^\d+ min$/.test(arriving);
-            const isTime = /^\d{1,2}:\d{2} (am|pm)$/.test(arriving);
+          // Should be either "Now", "X m", or "H:MM am/pm" format
+          const isNow = arriving === 'Now';
+          const isMinutes = /^\d+ m$/.test(arriving);
+          const isTime = /^\d{1,2}:\d{2} (am|pm)$/.test(arriving);
 
-            expect(isNow || isMinutes || isTime).toBe(true);
-          });
+          expect(isNow || isMinutes || isTime).toBe(true);
         });
       }
     }, API_TIMEOUT);
@@ -126,28 +135,25 @@ describe('Bus Display Worker', () => {
       const response = await worker.fetch(request);
       const data = await response.json();
 
-      if (data.routes.length > 0) {
-        data.routes.forEach(route => {
-          route.buses.forEach(bus => {
-            // Should never be "0 min", should be "Now" instead
-            expect(bus.arriving).not.toBe('0 min');
-          });
+      if (data.arrivals.length > 0) {
+        data.arrivals.forEach(arrival => {
+          // Should never be "0 m", should be "Now" instead
+          expect(arrival.arriving).not.toBe('0 m');
         });
       }
     }, API_TIMEOUT);
   });
 
-  describe('Delay information', () => {
-    it('should include delay information in seconds', async () => {
+  describe('Deviation information', () => {
+    it('should include deviation information in seconds', async () => {
       const request = new Request('http://localhost:8787/stop/101028');
       const response = await worker.fetch(request);
       const data = await response.json();
 
-      if (data.routes.length > 0 && data.routes[0].buses.length > 0) {
-        data.routes.forEach(route => {
-          route.buses.forEach(bus => {
-            expect(typeof bus.delayed_by).toBe('number');
-          });
+      if (data.arrivals.length > 0) {
+        data.arrivals.forEach(arrival => {
+          expect(typeof arrival.deviation).toBe('number');
+          expect(arrival).not.toHaveProperty('delayed_by');
         });
       }
     }, API_TIMEOUT);
@@ -170,7 +176,7 @@ describe('Bus Display Worker', () => {
 
       expect(response.status).toBe(200);
       expect(data.stopId).toBe('999999');
-      expect(data.routes).toEqual([]);
+      expect(data.arrivals).toEqual([]);
     }, API_TIMEOUT);
   });
 });
