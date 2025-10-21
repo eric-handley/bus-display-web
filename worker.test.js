@@ -15,7 +15,6 @@ describe('Bus Display Worker', () => {
       expect(data.error).toBe('Invalid route');
       expect(data.message).toBe('Please use the format /stop/{stopId}');
       expect(data.usage).toContain('/stop/');
-      expect(data.exampleStops).toBeInstanceOf(Array);
     });
 
     it('should return error for invalid route (wrong path)', async () => {

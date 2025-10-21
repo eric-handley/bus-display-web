@@ -1,7 +1,7 @@
-// import stopsCSV from './data/stops.csv';
+import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
 
-// GTFS Realtime API endpoint
-const TRIP_UPDATES_URL = 'https://bct.tmix.se/gtfs-realtime/tripupdates.js?operatorIds=48';
+// GTFS Realtime API endpoint (protobuf)
+const TRIP_UPDATES_URL = 'https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48';
 
 // Maximum number of upcoming arrivals to show
 const MAX_ARRIVALS = 8;
@@ -27,8 +27,8 @@ function formatArrivalTime(timestamp, nowTimestamp) {
   // If less than 60 minutes, show relative time
   if (minutesUntilArrival < 60) {
     const minutes = Math.max(0, minutesUntilArrival);
-return minutes === 0 ? 'Now' : `${minutes} m`;
-}
+    return minutes === 0 ? 'Now' : `${minutes} min`;
+  }
 
   // Otherwise show absolute time in PST/PDT
   const date = new Date(timestamp * 1000);
@@ -60,26 +60,26 @@ function processGTFSData(gtfsData, requestedStopId) {
   }
 
   gtfsData.entity.forEach(entity => {
-    if (!entity.trip_update) return;
+    if (!entity.tripUpdate) return;
 
-    const tripUpdate = entity.trip_update;
-    const rawRouteId = tripUpdate.trip?.route_id;
+    const tripUpdate = entity.tripUpdate;
+    const rawRouteId = tripUpdate.trip?.routeId;
 
-    if (!rawRouteId || !tripUpdate.stop_time_update) return;
+    if (!rawRouteId || !tripUpdate.stopTimeUpdate) return;
 
     // Strip suffix (e.g., "28-VIC" -> "28")
     const routeId = rawRouteId.split('-')[0];
 
     // Check each stop time update
-    tripUpdate.stop_time_update.forEach(stopUpdate => {
-      const stopId = stopUpdate.stop_id;
+    tripUpdate.stopTimeUpdate.forEach(stopUpdate => {
+      const stopId = stopUpdate.stopId;
 
       // Only process the requested stop
       if (stopId !== requestedStopId) return;
-      if (!stopUpdate.arrival?.timeSpecified) return;
+      if (!stopUpdate.arrival?.time) return;
 
       const arrivalTime = stopUpdate.arrival.time;
-      const delay = stopUpdate.arrival.delaySpecified ? stopUpdate.arrival.delay : 0;
+      const delay = stopUpdate.arrival.delay || 0;
 
       // Only include future arrivals
       if (arrivalTime <= nowTimestamp) return;
@@ -136,7 +136,7 @@ export default {
 
       const stopId = pathMatch[1];
 
-      // Fetch GTFS realtime trip updates
+      // Fetch GTFS realtime trip updates (protobuf)
       const response = await fetch(TRIP_UPDATES_URL);
 
       if (!response.ok) {
@@ -149,8 +149,12 @@ export default {
         );
       }
 
-      // Parse the JSON response
-      const gtfsData = await response.json();
+      // Parse the protobuf response
+      const buffer = await response.arrayBuffer();
+      const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(
+        new Uint8Array(buffer)
+      );
+      const gtfsData = { entity: feed.entity };
 
       // Process and format the data for the requested stop
       const result = processGTFSData(gtfsData, stopId);
