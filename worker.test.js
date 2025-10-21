@@ -43,7 +43,6 @@ describe('Bus Display Worker', () => {
       const data = await response.json();
 
       expect(data).toHaveProperty('stopId', '101028');
-      expect(data).toHaveProperty('stopName');
       expect(data).toHaveProperty('arrivals');
       expect(data.arrivals).toBeInstanceOf(Array);
     }, API_TIMEOUT);

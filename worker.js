@@ -1,4 +1,4 @@
-import stopsCSV from './data/stops.csv';
+// import stopsCSV from './data/stops.csv';
 
 // GTFS Realtime API endpoint
 const TRIP_UPDATES_URL = 'https://bct.tmix.se/gtfs-realtime/tripupdates.js?operatorIds=48';
@@ -7,13 +7,13 @@ const TRIP_UPDATES_URL = 'https://bct.tmix.se/gtfs-realtime/tripupdates.js?opera
 const MAX_ARRIVALS = 8;
 
 // Parse stops CSV into a map
-const STOPS = new Map();
-stopsCSV.split('\n').slice(1).forEach(line => {
-  const [stopId, stopName] = line.split(',');
-  if (stopId && stopName) {
-    STOPS.set(stopId, stopName);
-  }
-});
+// const STOPS = new Map();
+// stopsCSV.split('\n').slice(1).forEach(line => {
+//   const [stopId, stopName] = line.split(',');
+//   if (stopId && stopName) {
+//     STOPS.set(stopId, stopName);
+//   }
+// });
 
 /**
  * Format a Unix timestamp as arrival time string
@@ -108,7 +108,6 @@ function processGTFSData(gtfsData, requestedStopId) {
 
   return {
     stopId: requestedStopId,
-    stopName: STOPS.get(requestedStopId) || `Stop ${requestedStopId}`,
     arrivals: limitedArrivals
   };
 }
@@ -161,7 +160,6 @@ export default {
         return new Response(
           JSON.stringify({
             stopId,
-            stopName: STOPS.get(stopId) || `Stop ${stopId}`,
             arrivals: []
           }, null, 2),
           {
