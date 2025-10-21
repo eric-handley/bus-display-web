@@ -21,7 +21,8 @@ function formatArrivalTime(timestamp, nowTimestamp) {
 
   // If less than 60 minutes, show relative time
   if (minutesUntilArrival < 60) {
-    return `${Math.max(0, minutesUntilArrival)} min`;
+    const minutes = Math.max(0, minutesUntilArrival);
+    return minutes === 0 ? 'Now' : `${minutes} min`;
   }
 
   // Otherwise show absolute time in PST/PDT
@@ -57,9 +58,12 @@ function processGTFSData(gtfsData, requestedStopId) {
     if (!entity.trip_update) return;
 
     const tripUpdate = entity.trip_update;
-    const routeId = tripUpdate.trip?.route_id;
+    const rawRouteId = tripUpdate.trip?.route_id;
 
-    if (!routeId || !tripUpdate.stop_time_update) return;
+    if (!rawRouteId || !tripUpdate.stop_time_update) return;
+
+    // Strip suffix (e.g., "28-VIC" -> "28")
+    const routeId = rawRouteId.split('-')[0];
 
     // Check each stop time update
     tripUpdate.stop_time_update.forEach(stopUpdate => {
