@@ -1,14 +1,19 @@
+import stopsCSV from './data/stops.csv';
+
 // GTFS Realtime API endpoint
 const TRIP_UPDATES_URL = 'https://bct.tmix.se/gtfs-realtime/tripupdates.js?operatorIds=48';
 
 // Maximum number of upcoming arrivals to show
 const MAX_ARRIVALS = 8;
 
-// All available stops (from data/stops.csv)
-const ALL_STOPS = {
-  '101028': 'Shelbourne St at Blair Ave',
-  '101039': 'Shelbourne St at Blair Ave'
-};
+// Parse stops CSV into a map
+const STOPS = new Map();
+stopsCSV.split('\n').slice(1).forEach(line => {
+  const [stopId, stopName] = line.split(',');
+  if (stopId && stopName) {
+    STOPS.set(stopId, stopName);
+  }
+});
 
 /**
  * Format a Unix timestamp as arrival time string
@@ -22,8 +27,8 @@ function formatArrivalTime(timestamp, nowTimestamp) {
   // If less than 60 minutes, show relative time
   if (minutesUntilArrival < 60) {
     const minutes = Math.max(0, minutesUntilArrival);
-    return minutes === 0 ? 'Now' : `${minutes} m`;
-  }
+return minutes === 0 ? 'Now' : `${minutes} m`;
+}
 
   // Otherwise show absolute time in PST/PDT
   const date = new Date(timestamp * 1000);
@@ -103,7 +108,7 @@ function processGTFSData(gtfsData, requestedStopId) {
 
   return {
     stopId: requestedStopId,
-    stopName: ALL_STOPS[requestedStopId] || 'Unknown Stop',
+    stopName: STOPS.get(requestedStopId) || `Stop ${requestedStopId}`,
     arrivals: limitedArrivals
   };
 }
@@ -121,11 +126,7 @@ export default {
           JSON.stringify({
             error: 'Invalid route',
             message: 'Please use the format /stop/{stopId}',
-            usage: `${url.origin}/stop/101028`,
-            exampleStops: Object.keys(ALL_STOPS).map(id => ({
-              stopId: id,
-              stopName: ALL_STOPS[id]
-            }))
+            usage: `${url.origin}/stop/100000`
           }, null, 2),
           {
             status: 400,
@@ -160,7 +161,7 @@ export default {
         return new Response(
           JSON.stringify({
             stopId,
-            stopName: ALL_STOPS[stopId] || 'Unknown Stop',
+            stopName: STOPS.get(stopId) || `Stop ${stopId}`,
             arrivals: []
           }, null, 2),
           {
