@@ -1,8 +1,8 @@
 // GTFS Realtime API endpoint
 const TRIP_UPDATES_URL = 'https://bct.tmix.se/gtfs-realtime/tripupdates.js?operatorIds=48';
 
-// Maximum number of upcoming buses to show per route
-const MAX_BUSES_PER_ROUTE = 5;
+// Maximum number of upcoming arrivals to show
+const MAX_ARRIVALS = 8;
 
 // All available stops (from data/stops.csv)
 const ALL_STOPS = {
@@ -41,13 +41,13 @@ function formatArrivalTime(timestamp, nowTimestamp) {
  * Process GTFS realtime data and extract arrivals for a specific stop
  * @param {Object} gtfsData - GTFS realtime feed data
  * @param {string} requestedStopId - The stop ID to filter for
- * @returns {Object|null} Stop data with routes and buses, or null if no arrivals
+ * @returns {Object|null} Stop data with arrivals, or null if no arrivals
  */
 function processGTFSData(gtfsData, requestedStopId) {
   const nowTimestamp = Math.floor(Date.now() / 1000);
 
-  // Map to store arrivals grouped by route -> buses
-  const routeMap = new Map();
+  // Array to store all arrivals
+  const arrivals = [];
 
   // Process each trip update
   if (!gtfsData.entity) {
@@ -79,48 +79,32 @@ function processGTFSData(gtfsData, requestedStopId) {
       // Only include future arrivals
       if (arrivalTime <= nowTimestamp) return;
 
-      // Get or create route entry
-      if (!routeMap.has(routeId)) {
-        routeMap.set(routeId, []);
-      }
-
-      // Add bus arrival info
-      routeMap.get(routeId).push({
+      // Add arrival info
+      arrivals.push({
+        routeId,
         arriving: formatArrivalTime(arrivalTime, nowTimestamp),
         arrivalTimestamp: arrivalTime, // For sorting
-        delayed_by: delay
+        deviation: delay
       });
     });
   });
 
-  // Convert map structure to result format
-  const routes = [];
-
-  routeMap.forEach((buses, routeId) => {
-    // Sort buses by arrival time
-    buses.sort((a, b) => a.arrivalTimestamp - b.arrivalTimestamp);
-
-    // Limit to MAX_BUSES_PER_ROUTE
-    const limitedBuses = buses.slice(0, MAX_BUSES_PER_ROUTE);
-
-    // Remove temporary sorting field
-    limitedBuses.forEach(bus => delete bus.arrivalTimestamp);
-
-    routes.push({
-      routeId,
-      buses: limitedBuses
-    });
-  });
-
   // Return null if no arrivals found
-  if (routes.length === 0) {
+  if (arrivals.length === 0) {
     return null;
   }
+
+  // Sort all arrivals by time
+  arrivals.sort((a, b) => a.arrivalTimestamp - b.arrivalTimestamp);
+
+  // Limit to MAX_ARRIVALS and remove temporary sorting field
+  const limitedArrivals = arrivals.slice(0, MAX_ARRIVALS);
+  limitedArrivals.forEach(arrival => delete arrival.arrivalTimestamp);
 
   return {
     stopId: requestedStopId,
     stopName: ALL_STOPS[requestedStopId] || 'Unknown Stop',
-    routes
+    arrivals: limitedArrivals
   };
 }
 
@@ -171,13 +155,13 @@ export default {
       // Process and format the data for the requested stop
       const result = processGTFSData(gtfsData, stopId);
 
-      // Return empty routes if no arrivals found
+      // Return empty arrivals if no arrivals found
       if (!result) {
         return new Response(
           JSON.stringify({
             stopId,
             stopName: ALL_STOPS[stopId] || 'Unknown Stop',
-            routes: []
+            arrivals: []
           }, null, 2),
           {
             headers: {
