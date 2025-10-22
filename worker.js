@@ -43,89 +43,114 @@ function formatArrivalTime(timestamp, nowTimestamp) {
 }
 
 /**
- * Process GTFS realtime data and extract arrivals for a specific stop
+ * Process GTFS realtime data and extract arrivals for multiple stops
  * @param {Object} gtfsData - GTFS realtime feed data
- * @param {string} requestedStopId - The stop ID to filter for
- * @returns {Object|null} Stop data with arrivals, or null if no arrivals
+ * @param {string[]} requestedStopIds - Array of stop IDs to filter for
+ * @returns {Object[]} Array of stop data with arrivals
  */
-function processGTFSData(gtfsData, requestedStopId) {
+function processGTFSData(gtfsData, requestedStopIds) {
   const nowTimestamp = Math.floor(Date.now() / 1000);
 
-  // Array to store all arrivals
-  const arrivals = [];
+  // Map to store arrivals per stop
+  const stopArrivals = new Map();
+  requestedStopIds.forEach(stopId => stopArrivals.set(stopId, []));
 
   // Process each trip update
   if (!gtfsData.entity) {
-    return null;
+    return formatResults(stopArrivals, nowTimestamp);
   }
 
-  gtfsData.entity.forEach(entity => {
-    if (!entity.tripUpdate) return;
+  // Track how many stops still need arrivals (for early exit)
+  let stopsNeedingMore = requestedStopIds.length;
+
+  for (const entity of gtfsData.entity) {
+    if (!entity.tripUpdate) continue;
 
     const tripUpdate = entity.tripUpdate;
     const rawRouteId = tripUpdate.trip?.routeId;
 
-    if (!rawRouteId || !tripUpdate.stopTimeUpdate) return;
+    if (!rawRouteId || !tripUpdate.stopTimeUpdate) continue;
 
-    // Strip suffix (e.g., "28-VIC" -> "28")
+    // Strip suffix once per trip (e.g., "28-VIC" -> "28")
     const routeId = rawRouteId.split('-')[0];
 
     // Check each stop time update
-    tripUpdate.stopTimeUpdate.forEach(stopUpdate => {
+    for (const stopUpdate of tripUpdate.stopTimeUpdate) {
       const stopId = stopUpdate.stopId;
 
-      // Only process the requested stop
-      if (stopId !== requestedStopId) return;
-      if (!stopUpdate.arrival?.time) return;
+      // Only process requested stops
+      if (!stopArrivals.has(stopId)) continue;
+      if (!stopUpdate.arrival?.time) continue;
 
       const arrivalTime = stopUpdate.arrival.time;
-      const delay = stopUpdate.arrival.delay || 0;
 
       // Only include future arrivals
-      if (arrivalTime <= nowTimestamp) return;
+      if (arrivalTime <= nowTimestamp) continue;
 
-      // Add arrival info
+      const arrivals = stopArrivals.get(stopId);
       arrivals.push({
         routeId,
-        arriving: formatArrivalTime(arrivalTime, nowTimestamp),
-        arrivalTimestamp: arrivalTime, // For sorting
-        deviation: delay
+        arrivalTimestamp: arrivalTime,
+        deviation: stopUpdate.arrival.delay || 0
       });
-    });
-  });
 
-  // Return null if no arrivals found
-  if (arrivals.length === 0) {
-    return null;
+      // Check if this stop has enough arrivals (3x buffer before sorting)
+      if (arrivals.length === MAX_ARRIVALS * 3) {
+        stopsNeedingMore--;
+        if (stopsNeedingMore === 0) break;
+      }
+    }
+
+    // Early exit if all stops have plenty of arrivals
+    if (stopsNeedingMore === 0) break;
   }
 
-  // Sort all arrivals by time
-  arrivals.sort((a, b) => a.arrivalTimestamp - b.arrivalTimestamp);
+  return formatResults(stopArrivals, nowTimestamp);
+}
 
-  // Limit to MAX_ARRIVALS and remove temporary sorting field
-  const limitedArrivals = arrivals.slice(0, MAX_ARRIVALS);
-  limitedArrivals.forEach(arrival => delete arrival.arrivalTimestamp);
+/**
+ * Format and sort arrivals for each stop
+ * @param {Map} stopArrivals - Map of stop IDs to arrival arrays
+ * @param {number} nowTimestamp - Current timestamp
+ * @returns {Object[]} Array of formatted stop results
+ */
+function formatResults(stopArrivals, nowTimestamp) {
+  const results = [];
 
-  return {
-    stopId: requestedStopId,
-    arrivals: limitedArrivals
-  };
+  for (const [stopId, arrivals] of stopArrivals) {
+    // Sort by arrival time
+    arrivals.sort((a, b) => a.arrivalTimestamp - b.arrivalTimestamp);
+
+    // Format only the final limited results
+    const limitedArrivals = arrivals.slice(0, MAX_ARRIVALS).map(a => ({
+      routeId: a.routeId,
+      arriving: formatArrivalTime(a.arrivalTimestamp, nowTimestamp),
+      deviation: a.deviation
+    }));
+
+    results.push({
+      stopId,
+      arrivals: limitedArrivals
+    });
+  }
+
+  return results;
 }
 
 export default {
   async fetch(request) {
     try {
-      // Parse URL to get path
       const url = new URL(request.url);
-      const pathMatch = url.pathname.match(/^\/stop\/(\d+)$/);
 
-      // Require /stop/{id} format
-      if (!pathMatch) {
+      // Only accept POST requests to root path
+      if (request.method !== 'POST' || url.pathname !== '/') {
         return new Response(
           JSON.stringify({
-            error: 'Invalid route',
-            message: 'Please use the format /stop/{stopId}',
-            usage: `${url.origin}/stop/100000`
+            error: 'Invalid request',
+            message: 'Send a POST request to / with a JSON body containing stopIds',
+            example: {
+              stopIds: ['101028', '101039', '100998', '100988']
+            }
           }, null, 2),
           {
             status: 400,
@@ -134,9 +159,44 @@ export default {
         );
       }
 
-      const stopId = pathMatch[1];
+      // Parse request body
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return new Response(
+          JSON.stringify({
+            error: 'Invalid JSON',
+            message: 'Request body must be valid JSON'
+          }, null, 2),
+          {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        );
+      }
 
-      // Fetch GTFS realtime trip updates (protobuf)
+      // Validate stopIds
+      if (!body.stopIds || !Array.isArray(body.stopIds) || body.stopIds.length === 0) {
+        return new Response(
+          JSON.stringify({
+            error: 'Invalid stopIds',
+            message: 'Request body must contain a non-empty array of stopIds',
+            example: {
+              stopIds: ['101028', '101039']
+            }
+          }, null, 2),
+          {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        );
+      }
+
+      // Convert all stop IDs to strings
+      const stopIds = body.stopIds.map(id => String(id));
+
+      // Fetch GTFS realtime trip updates (protobuf) - only once for all stops
       const response = await fetch(TRIP_UPDATES_URL);
 
       if (!response.ok) {
@@ -156,28 +216,12 @@ export default {
       );
       const gtfsData = { entity: feed.entity };
 
-      // Process and format the data for the requested stop
-      const result = processGTFSData(gtfsData, stopId);
-
-      // Return empty arrivals if no arrivals found
-      if (!result) {
-        return new Response(
-          JSON.stringify({
-            stopId,
-            arrivals: []
-          }, null, 2),
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Cache-Control': 'public, max-age=30'
-            }
-          }
-        );
-      }
+      // Process and format the data for all requested stops
+      const results = processGTFSData(gtfsData, stopIds);
 
       // Return formatted response
       return new Response(
-        JSON.stringify(result, null, 2),
+        JSON.stringify(results, null, 2),
         {
           headers: {
             'Content-Type': 'application/json',
